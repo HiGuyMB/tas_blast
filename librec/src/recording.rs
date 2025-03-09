@@ -159,6 +159,15 @@ impl Recording {
     }
 }
 
+#[test]
+fn test_extreme_floats() {
+    let mut high_bits = BitStream::new(vec![0xff, 0xff, 0xff, 0xff, 0xff]);
+    println!("{}", high_bits.read_scaled_f64_bits(6, 1f64 / 16f64, -1.0f64).unwrap_or(0f64));
+
+    let mut low_bits = BitStream::new(vec![0, 0, 0, 0, 0]);
+    println!("{}", low_bits.read_scaled_f64_bits(6, 1f64 / 16f64, -1.0f64).unwrap_or(0f64));
+}
+
 // Camera movement is using floats, which can be confused by floating point precision
 // "Numbers are hard"
 #[test]
