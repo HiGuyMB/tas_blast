@@ -2,6 +2,7 @@ use crate::bit_stream::BitStream;
 use std::cmp::max;
 use std::f64::consts::PI;
 use crate::error::Result;
+use crate::error::ErrorKind::GenericError;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,9 +18,43 @@ pub struct Move {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeedrunHeader {
+    pub version_major: u8,
+    pub version_minor: u8,
+    pub reference_system_time: u64,
+    pub epoch_offset: u64,
+    pub resolution_horz: u16,
+    pub resolution_vert: u16,
+    pub fov: f32,
+    pub fps: f32
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhysicsData {
+    pub position_x: f64,
+    pub position_y: f64,
+    pub position_z: f64,
+    pub velocity_x: f64,
+    pub velocity_y: f64,
+    pub velocity_z: f64,
+    pub angular_velocity_x: f64,
+    pub angular_velocity_y: f64,
+    pub angular_velocity_z: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtraData {
+    pub speedrun_header: Option<SpeedrunHeader>,
+    pub sys_time_delta: Option<u32>,
+    pub game_elapsed: Option<u32>,
+    pub physics_data: Option<PhysicsData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub moves: [Option<Move>; 2],
     pub delta: u16,
+    pub extra_data: Option<ExtraData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,14 +121,125 @@ impl Move {
     }
 }
 
+impl SpeedrunHeader {
+    pub fn from_stream(bs: &mut BitStream) -> Result<Self> {
+        let version_major = bs.read_u8()?;
+        let version_minor = bs.read_u8()?;
+        let reference_system_time = bs.read_u64()?;
+        let epoch_offset = bs.read_u64()?;
+        let resolution_horz = bs.read_u16()?;
+        let resolution_vert = bs.read_u16()?;
+        let fov = f32::from_bits(bs.read_u32()?);
+        let fps = f32::from_bits(bs.read_u32()?);
+        Ok(Self {
+            version_major,
+            version_minor,
+            reference_system_time,
+            epoch_offset,
+            resolution_horz,
+            resolution_vert,
+            fov,
+            fps,
+        })
+    }
+
+    pub fn into_stream(self, bs: &mut BitStream) -> Result<()> {
+        bs.write_u8(self.version_major)?;
+        bs.write_u8(self.version_minor)?;
+        bs.write_u64(self.reference_system_time)?;
+        bs.write_u64(self.epoch_offset)?;
+        bs.write_u16(self.resolution_horz)?;
+        bs.write_u16(self.resolution_vert)?;
+        bs.write_u32(self.fov.to_bits())?;
+        bs.write_u32(self.fps.to_bits())?;
+        Ok(())
+    }
+}
+
+impl PhysicsData {
+    pub fn from_stream(bs: &mut BitStream) -> Result<Self> {
+        let position_x = f64::from_bits(bs.read_u64()?);
+        let position_y = f64::from_bits(bs.read_u64()?);
+        let position_z = f64::from_bits(bs.read_u64()?);
+        let velocity_x = f64::from_bits(bs.read_u64()?);
+        let velocity_y = f64::from_bits(bs.read_u64()?);
+        let velocity_z = f64::from_bits(bs.read_u64()?);
+        let angular_velocity_x = f64::from_bits(bs.read_u64()?);
+        let angular_velocity_y = f64::from_bits(bs.read_u64()?);
+        let angular_velocity_z = f64::from_bits(bs.read_u64()?);
+        Ok(Self {
+            position_x,
+            position_y,
+            position_z,
+            velocity_x,
+            velocity_y,
+            velocity_z,
+            angular_velocity_x,
+            angular_velocity_y,
+            angular_velocity_z,
+        })
+    }
+
+    pub fn into_stream(self, bs: &mut BitStream) -> Result<()> {
+        bs.write_u64(self.position_x.to_bits())?;
+        bs.write_u64(self.position_y.to_bits())?;
+        bs.write_u64(self.position_z.to_bits())?;
+        bs.write_u64(self.velocity_x.to_bits())?;
+        bs.write_u64(self.velocity_y.to_bits())?;
+        bs.write_u64(self.velocity_z.to_bits())?;
+        bs.write_u64(self.angular_velocity_x.to_bits())?;
+        bs.write_u64(self.angular_velocity_y.to_bits())?;
+        bs.write_u64(self.angular_velocity_z.to_bits())?;
+        Ok(())
+    }
+}
+
+impl ExtraData {
+    pub fn from_stream(bs: &mut BitStream) -> Result<Self> {
+        let speedrun_header = bs.read_optional(|bs| SpeedrunHeader::from_stream(bs))?;
+        let sys_time_delta = bs.read_optional(|bs| bs.read_bits_u32(24))?;
+        let game_elapsed = bs.read_optional(|bs| bs.read_bits_u32(24))?;
+        let physics_data = bs.read_optional(|bs| PhysicsData::from_stream(bs))?;
+
+        match (
+            &speedrun_header,
+            &sys_time_delta,
+            &game_elapsed,
+            &physics_data,
+        ) {
+            (None, None, None, None) => {
+                Err(GenericError("Empty").into())
+            },
+            _ => {
+                Ok(Self {
+                    speedrun_header,
+                    sys_time_delta,
+                    game_elapsed,
+                    physics_data
+                })
+            }
+        }
+    }
+
+    pub fn into_stream(self, bs: &mut BitStream) -> Result<()> {
+        bs.write_optional(self.speedrun_header, |bs, header| header.into_stream(bs))?;
+        bs.write_optional(self.sys_time_delta, |bs, delta| bs.write_bits_u32(delta, 24))?;
+        bs.write_optional(self.game_elapsed, |bs, elapsed| bs.write_bits_u32(elapsed, 24))?;
+        bs.write_optional(self.physics_data, |bs, data| data.into_stream(bs))?;
+        Ok(())
+    }
+}
+
 impl Frame {
     pub fn from_stream(bs: &mut BitStream) -> Result<Frame> {
         let move0 = bs.read_optional(|bs| Move::from_stream(bs))?;
         let move1 = bs.read_optional(|bs| Move::from_stream(bs))?;
         let delta = bs.read_bits_u16(10)?;
+        let extra_data = ExtraData::from_stream(bs).ok();
         Ok(Frame {
             moves: [move0, move1],
             delta,
+            extra_data
         })
     }
 
@@ -101,7 +247,11 @@ impl Frame {
         let [m1, m2] = self.moves;
         bs.write_optional(m1, |bs, mv| mv.into_stream(bs))?;
         bs.write_optional(m2, |bs, mv| mv.into_stream(bs))?;
-        bs.write_bits_u16(self.delta, 10)
+        bs.write_bits_u16(self.delta, 10)?;
+        if let Some(extra_data) = self.extra_data {
+            extra_data.into_stream(bs)?;
+        }
+        Ok(())
     }
 
     pub fn has_move(&self) -> bool {

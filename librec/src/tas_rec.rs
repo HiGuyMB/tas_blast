@@ -1,16 +1,18 @@
-use crate::recording::{Frame, Move, Recording};
+use crate::recording::{ExtraData, Frame, Move, PhysicsData, Recording, SpeedrunHeader};
 use nom::branch::alt;
 use nom::bytes::complete::is_not;
 use nom::bytes::complete::{escaped, is_a, tag, take_while};
 use nom::character::complete::{char, one_of};
 use nom::combinator::{cut, map, opt};
 use nom::error::{context, convert_error, ParseError, VerboseError};
-use nom::multi::{many0, separated_list};
-use nom::number::complete::double;
+use nom::multi::{many0, many1, separated_list};
+use nom::number::complete::{double, float};
 use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
 use nom::{Err, IResult};
 use regex::Regex;
+use std::fmt::Debug;
 use std::io::Write;
+use std::str::FromStr;
 use crate::error::Result;
 use crate::error::ErrorKind::{GenericError, GenericError2};
 
@@ -92,6 +94,46 @@ impl TasFile {
         Ok(())
     }
 
+    fn print_extra<T>(
+        &self,
+        extra: &ExtraData,
+        out: &mut T,
+    ) -> Result<()>
+    where
+        T: Write
+    {
+        if let Some(speedrun_header) = &extra.speedrun_header {
+            out.write_fmt(format_args!(
+                "         header ({} {} {} {} {} {} {} {})\n",
+                speedrun_header.version_major,
+                speedrun_header.version_minor,
+                speedrun_header.reference_system_time,
+                speedrun_header.epoch_offset,
+                speedrun_header.resolution_horz,
+                speedrun_header.resolution_vert,
+                speedrun_header.fov,
+                speedrun_header.fps,
+            ))?;
+        }
+        out.write_fmt(format_args!("         sysDelta {}\n", extra.sys_time_delta.unwrap_or(0)))?;
+        out.write_fmt(format_args!("         gameElapsed {}\n", extra.game_elapsed.unwrap_or(0)))?;
+        if let Some(physics_data) = &extra.physics_data {
+            out.write_fmt(format_args!(
+                "         physics ({} {} {} {} {} {} {} {} {})\n",
+                physics_data.position_x,
+                physics_data.position_y,
+                physics_data.position_z,
+                physics_data.velocity_x,
+                physics_data.velocity_y,
+                physics_data.velocity_z,
+                physics_data.angular_velocity_x,
+                physics_data.angular_velocity_y,
+                physics_data.angular_velocity_z,
+            ))?;
+        }
+        Ok(())
+    }
+
     fn print_sequence<T>(
         &self,
         seq: &Sequence,
@@ -118,6 +160,11 @@ impl TasFile {
                 ))?;
                 self.print_move(&frame.moves[0], out)?;
                 self.print_move(&frame.moves[1], out)?;
+                if let Some(extra) = &frame.extra_data {
+                    out.write_fmt(format_args!("      {{\n"))?;
+                    self.print_extra(extra, out)?;
+                    out.write_fmt(format_args!("      }}\n"))?;
+                }
             } else {
                 // See how many in a row we have
                 let mut combined = 0;
@@ -229,6 +276,7 @@ fn empty_frame<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, Vec<F
         vec![Frame {
             moves: [None, None],
             delta: ms as u16,
+            extra_data: None,
         }]
     }))(i)
 }
@@ -242,6 +290,7 @@ fn empty_frames<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, Vec<
                 v.push(Frame {
                     moves: [None, None],
                     delta: ms.map(|f| f as u16).unwrap_or(1),
+                    extra_data: None,
                 })
             }
             v
@@ -318,20 +367,105 @@ fn move_<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, Option<Move
     delim_context_cut("move", char('{'), ws_before(opt(move_inner)), char('}'))(i)
 }
 
+fn decimal<'a, T: FromStr, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, T, E>
+where <T as FromStr>::Err: Debug {
+    map(
+        many1(one_of("0123456789")),
+        |chars| {
+            T::from_str(
+                &chars.into_iter().collect::<String>()
+            ).expect("number parse should work")
+        }
+    )(i)
+}
+
+fn speedrun_header<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, SpeedrunHeader, E> {
+    delim_context_cut("speedrun_header", char('('), map(tuple((
+        ws_before(decimal::<u8, E>),
+        ws_before(decimal::<u8, E>),
+        ws_before(decimal::<u64, E>),
+        ws_before(decimal::<u64, E>),
+        ws_before(decimal::<u16, E>),
+        ws_before(decimal::<u16, E>),
+        ws_before(float),
+        ws_before(float),
+    )), |(version_major, version_minor, reference_system_time, epoch_offset, resolution_horz, resolution_vert, fov, fps)| {
+        SpeedrunHeader {
+            version_major,
+            version_minor,
+            reference_system_time,
+            epoch_offset,
+            resolution_horz,
+            resolution_vert,
+            fov,
+            fps,
+        }
+    }), char(')'))(i)
+}
+
+fn physics_data<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, PhysicsData, E> {
+    delim_context_cut("physics_data", char('('), map(tuple((
+        ws_before(double),
+        ws_before(double),
+        ws_before(double),
+        ws_before(double),
+        ws_before(double),
+        ws_before(double),
+        ws_before(double),
+        ws_before(double),
+        ws_before(double),
+    )), |(position_x, position_y, position_z, velocity_x, velocity_y, velocity_z, angular_velocity_x, angular_velocity_y, angular_velocity_z)| {
+        PhysicsData {
+            position_x,
+            position_y,
+            position_z,
+            velocity_x,
+            velocity_y,
+            velocity_z,
+            angular_velocity_x,
+            angular_velocity_y,
+            angular_velocity_z,
+        }
+    }), char(')'))(i)
+}
+
+fn extra_data<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, ExtraData, E> {
+    delim_context_cut("extra_data", char('{'), ws_wrap(
+        map(
+            tuple((
+                opt(ws_before(preceded(tag("header"), ws_before(speedrun_header)))),
+                ws_before(preceded(tag("sysDelta"), ws_before(decimal::<u32, E>))),
+                ws_before(preceded(tag("gameElapsed"), ws_before(decimal::<u32, E>))),
+                opt(ws_before(preceded(tag("physics"), ws_before(physics_data))))
+            )),
+            |(speedrun_header, sys_time_delta, game_elapsed, physics_data)| {
+                ExtraData {
+                    speedrun_header,
+                    sys_time_delta: Some(sys_time_delta),
+                    game_elapsed: Some(game_elapsed),
+                    physics_data
+                }
+            }
+        )
+    ), char('}'))(i)
+}
+
 fn move_frame<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, Vec<Frame>, E> {
-    ws_before(map(
-        separated_pair(
-            terminated(double, preceded(sp, tag("ms"))),
-            sp,
-            separated_pair(move_, sp, move_),
-        ),
-        |(ms, (mv0, mv1))| {
+    map(
+        tuple((
+            ws_before(terminated(double, preceded(sp, tag("ms")))),
+            ws_before(move_),
+            ws_before(move_),
+            opt(ws_before(extra_data)),
+        )),
+        |(ms, mv0, mv1, extra_data)| {
             vec![Frame {
                 moves: [mv0, mv1],
                 delta: ms as u16,
+                extra_data,
             }]
         },
-    ))(i)
+    )(i)
 }
 
 fn frame<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, Vec<Frame>, E> {
