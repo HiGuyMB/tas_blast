@@ -67,7 +67,7 @@ fn import_json_opt(conts: Vec<u8>) -> Result<String> {
     let mut bs = BitStream::new(conts);
 
     let r = Recording::from_stream(&mut bs)?;
-    let tf = serde_json::to_string(&r)?;
+    let tf = serde_json::to_string_pretty(&r)?;
     Ok(tf)
 }
 

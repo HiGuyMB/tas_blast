@@ -17,23 +17,48 @@ import("../pkg/index.js").then((librec) => {
     const button = document.getElementById("convert");
     const error_div = document.getElementById("error");
     const input_file = document.getElementById("input_file");
+    const input_json = document.getElementById("input_json");
+
+    var last_conts = null;
+
+    function update_conts() {
+        if (last_conts === null) {
+            return;
+        }
+        let converted;
+        if (input_json.checked) {
+            converted = librec.import_json(last_conts);
+        } else {
+            converted = librec.import_rect(last_conts);
+        }
+        try {
+            textbox.value = converted;
+        } catch (e) {
+            output_div.innerText = "Error: " + e.toString();
+        }
+    }
 
     input_file.addEventListener('change', async (e) => {
         let conts = input_file.files[0];
         if (conts) {
-            let result = await readFileAsync(conts);
-            let converted = librec.import_rect(new Uint8Array(result));
-            try {
-                textbox.value = converted;
-            } catch (e) {
-                output_div.innerText = "Error: " + e.toString();
-            }
+            last_conts = new Uint8Array(await readFileAsync(conts));
+            update_conts();
         }
+    });
+
+    input_json.addEventListener('change', (e) => {
+        update_conts();
     });
 
     button.addEventListener('click', function(){
         let conts = textbox.value.replace(/\t/g, "    ");
-        let converted = librec.export_rect(conts);
+        let converted;
+        if (input_json.checked) {
+            converted = librec.export_json(conts);
+        } else {
+            converted = librec.export_rect(conts);
+        }
+
         let success = converted[0];
         converted = converted.slice(1);
 

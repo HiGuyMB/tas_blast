@@ -1,5 +1,4 @@
 use crate::bit_stream::BitStream;
-use std::cmp::max;
 use std::f64::consts::PI;
 use crate::error::Result;
 use crate::error::ErrorKind::GenericError;

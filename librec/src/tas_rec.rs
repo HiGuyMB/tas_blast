@@ -83,7 +83,7 @@ impl TasFile {
             if !mv.freelook {
                 out.write_fmt(format_args!(
                     "         freelook 0\n"
-                ));
+                ))?;
             }
             out.write_fmt(format_args!(
                 "         triggers ({} {} {} {} {} {})\n",
