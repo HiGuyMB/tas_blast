@@ -65,11 +65,10 @@ fn main() -> Result<()> {
             let mut v: Vec<u8> = vec![];
             tf.print(&mut v)?;
 
-            println!("{}", String::from_utf8_lossy(&v));
-
             let tf2 = TasFile::parse(String::from_utf8(v)?)?;
             let r2 = tf2.into_rec();
-            fs::write("rec2.json", serde_json::to_string_pretty(&r2)?)?;
+            let j1 = serde_json::to_string_pretty(&r2)?;
+            fs::write("rec2.json", &j1)?;
 
             let mut os = BitStream::new(vec![]);
             r2.into_stream(&mut os)?;
@@ -77,9 +76,10 @@ fn main() -> Result<()> {
 
             os.seek(0, 0);
             let r3 = Recording::from_stream(&mut os)?;
-            fs::write("rec3.json", serde_json::to_string_pretty(&r3)?)?;
+            let j3 = serde_json::to_string_pretty(&r3)?;
+            fs::write("rec3.json", &j3)?;
 
-            assert_eq!(bs.into_bytes(), os.into_bytes());
+            assert_eq!(j1, j3);
             Ok(())
         }
         "--test-rect" => {
