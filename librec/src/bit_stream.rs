@@ -200,7 +200,7 @@ impl BitStream {
         if !(bits == 64 || value < (1 << u64::from(bits))) {
             return Err(GenericError("Value overflows bit count").into());
         }
-        self.write_bits_u32((value & 0xFF_FF_FF) as u32, min(bits, 32))?;
+        self.write_bits_u32((value & 0xFF_FF_FF_FF) as u32, min(bits, 32))?;
         if bits <= 32 {
             Ok(())
         } else {

@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::error::ErrorKind::GenericError;
 use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Move {
     pub yaw: Option<f64>,
     pub pitch: Option<f64>,
@@ -17,7 +17,7 @@ pub struct Move {
     pub triggers: [bool; 6],
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpeedrunHeader {
     pub version_major: u8,
     pub version_minor: u8,
@@ -29,7 +29,7 @@ pub struct SpeedrunHeader {
     pub fps: f32
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsData {
     pub position_x: f64,
     pub position_y: f64,
@@ -42,7 +42,7 @@ pub struct PhysicsData {
     pub angular_velocity_z: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtraData {
     pub speedrun_header: Option<SpeedrunHeader>,
     pub sys_time_delta: Option<u32>,
@@ -50,14 +50,14 @@ pub struct ExtraData {
     pub physics_data: Option<PhysicsData>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
     pub moves: [Option<Move>; 2],
     pub delta: u16,
     pub extra_data: Option<ExtraData>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Recording {
     pub mission: String,
     pub frames: Vec<Frame>,
@@ -254,8 +254,8 @@ impl Frame {
         Ok(())
     }
 
-    pub fn has_move(&self) -> bool {
-        self.moves[0].is_some() || self.moves[1].is_some()
+    pub fn has_data(&self) -> bool {
+        self.moves[0].is_some() || self.moves[1].is_some() || self.extra_data.is_some()
     }
 }
 
@@ -293,7 +293,7 @@ impl Recording {
             frame.into_stream(&mut inner_stream)?;
 
             let bytes = inner_stream.into_bytes();
-            let len = max(bytes.len(), 4);
+            let len = (bytes.len() + 3) & !0x3;
             let extra = len - bytes.len();
             bs.write_u8(len as u8)?;
 

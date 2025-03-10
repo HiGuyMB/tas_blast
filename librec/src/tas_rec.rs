@@ -16,13 +16,13 @@ use std::str::FromStr;
 use crate::error::Result;
 use crate::error::ErrorKind::{GenericError, GenericError2};
 
-#[derive(Debug, Clone)]
-
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sequence {
     pub name: String,
     pub frames: Vec<Frame>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct TasFile {
     pub mission: String,
     pub sequences: Vec<Sequence>,
@@ -68,18 +68,23 @@ impl TasFile {
     where
         T: Write,
     {
-        out.write_fmt(format_args!("      {{\n"))?;
         if let Some(mv) = opt_mv {
+            out.write_fmt(format_args!("      {{\n"))?;
             out.write_fmt(format_args!(
                 "         camera ({} {} {})\n",
-                mv.yaw.unwrap_or(0f64),
-                mv.pitch.unwrap_or(0f64),
-                mv.roll.unwrap_or(0f64)
+                mv.yaw.map(|val| format_args!("{}", val).to_string()).unwrap_or("null".to_string()),
+                mv.pitch.map(|val| format_args!("{}", val).to_string()).unwrap_or("null".to_string()),
+                mv.roll.map(|val| format_args!("{}", val).to_string()).unwrap_or("null".to_string())
             ))?;
             out.write_fmt(format_args!(
                 "         move ({} {} {})\n",
                 mv.mx, mv.my, mv.mz
             ))?;
+            if !mv.freelook {
+                out.write_fmt(format_args!(
+                    "         freelook 0\n"
+                ));
+            }
             out.write_fmt(format_args!(
                 "         triggers ({} {} {} {} {} {})\n",
                 mv.triggers[0] as u8,
@@ -89,8 +94,10 @@ impl TasFile {
                 mv.triggers[4] as u8,
                 mv.triggers[5] as u8
             ))?;
+            out.write_fmt(format_args!("      }}\n"))?;
+        } else {
+            out.write_fmt(format_args!("      {{}}\n"))?;
         }
-        out.write_fmt(format_args!("      }}\n"))?;
         Ok(())
     }
 
@@ -115,8 +122,12 @@ impl TasFile {
                 speedrun_header.fps,
             ))?;
         }
-        out.write_fmt(format_args!("         sysDelta {}\n", extra.sys_time_delta.unwrap_or(0)))?;
-        out.write_fmt(format_args!("         gameElapsed {}\n", extra.game_elapsed.unwrap_or(0)))?;
+        if let Some(sys_time_delta) = &extra.sys_time_delta {
+            out.write_fmt(format_args!("         sysDelta {}\n", sys_time_delta))?;
+        }
+        if let Some(game_elapsed) = &extra.game_elapsed {
+            out.write_fmt(format_args!("         gameElapsed {}\n", game_elapsed))?;
+        }
         if let Some(physics_data) = &extra.physics_data {
             out.write_fmt(format_args!(
                 "         physics ({} {} {} {} {} {} {} {} {})\n",
@@ -153,7 +164,7 @@ impl TasFile {
             let frame = &seq.frames[i];
 
             *elapsed += u32::from(frame.delta);
-            if frame.has_move() {
+            if frame.has_data() {
                 out.write_fmt(format_args!(
                     "      moveframe {} ms //{}\n",
                     frame.delta, elapsed
@@ -169,7 +180,7 @@ impl TasFile {
                 // See how many in a row we have
                 let mut combined = 0;
                 for j in i..seq.frames.len() {
-                    if seq.frames[j].has_move() {
+                    if seq.frames[j].has_data() {
                         break;
                     }
                     if seq.frames[j].delta != frame.delta {
@@ -341,21 +352,40 @@ fn bool6<'a, E: ParseError<&'a str>>(
     )(i)
 }
 
+fn opt_float<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, Option<f64>, E> {
+    alt((
+        map(double, |d| Some(d)),
+        map(tag("null"), |_| None),
+    ))(i)
+}
+
 fn move_inner<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, Move, E> {
     ws_wrap(map(
         tuple((
-            preceded(tag("camera"), ws_wrap(float3)),
+            preceded(tag("camera"), ws_wrap(
+                delim_context_cut(
+                    "camera",
+                    char('('),
+                    tuple((
+                        preceded(opt(sp), opt_float),
+                        preceded(opt(sp), opt_float),
+                        preceded(opt(sp), opt_float),
+                    )),
+                    char(')'),
+                )
+            )),
             preceded(tag("move"), ws_wrap(float3)),
+            opt(preceded(tag("freelook"), ws_wrap(decimal::<u8, E>))),
             preceded(tag("triggers"), ws_wrap(bool6)),
         )),
-        |((yaw, pitch, roll), (mx, my, mz), triggers)| Move {
-            yaw: Some(yaw),
-            pitch: Some(pitch),
-            roll: Some(roll),
+        |((yaw, pitch, roll), (mx, my, mz), freelook, triggers)| Move {
+            yaw,
+            pitch,
+            roll,
             mx,
             my,
             mz,
-            freelook: true,
+            freelook: freelook.unwrap_or(1) != 0,
             triggers: [
                 triggers.0, triggers.1, triggers.2, triggers.3, triggers.4, triggers.5,
             ],
@@ -434,15 +464,15 @@ fn extra_data<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, ExtraD
         map(
             tuple((
                 opt(ws_before(preceded(tag("header"), ws_before(speedrun_header)))),
-                ws_before(preceded(tag("sysDelta"), ws_before(decimal::<u32, E>))),
-                ws_before(preceded(tag("gameElapsed"), ws_before(decimal::<u32, E>))),
+                opt(ws_before(preceded(tag("sysDelta"), ws_before(decimal::<u32, E>)))),
+                opt(ws_before(preceded(tag("gameElapsed"), ws_before(decimal::<u32, E>)))),
                 opt(ws_before(preceded(tag("physics"), ws_before(physics_data))))
             )),
             |(speedrun_header, sys_time_delta, game_elapsed, physics_data)| {
                 ExtraData {
                     speedrun_header,
-                    sys_time_delta: Some(sys_time_delta),
-                    game_elapsed: Some(game_elapsed),
+                    sys_time_delta,
+                    game_elapsed,
                     physics_data
                 }
             }
